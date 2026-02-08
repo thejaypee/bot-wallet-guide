@@ -8,20 +8,27 @@ const PORT = 3000
 
 const publicClient = createPublicClient({ chain: baseSepolia, transport: http(process.env.RPC_URL) })
 const WETH = '0x4200000000000000000000000000000000000006'
+const LINK = '0xE4aB69C077896252FAFBD49EFD26B5D171A32410'
 const WALLET = '0xF86DcFC45532697ABE3ef2AfdAa20CAC44f86B8F'
 
-const WETH_ABI = [
+const ERC20_ABI = [
   { name: 'balanceOf', inputs: [{ name: 'account', type: 'address' }], outputs: [{ name: '', type: 'uint256' }], stateMutability: 'view', type: 'function' }
 ]
 
-let stats = { eth: 0, weth: 0, block: 0 }
+let stats = { eth: 0, weth: 0, link: 0, block: 0 }
 
 async function updateStats() {
   try {
     const eth = await publicClient.getBalance({ address: WALLET })
     const weth = await publicClient.readContract({
       address: WETH,
-      abi: WETH_ABI,
+      abi: ERC20_ABI,
+      functionName: 'balanceOf',
+      args: [WALLET]
+    })
+    const link = await publicClient.readContract({
+      address: LINK,
+      abi: ERC20_ABI,
       functionName: 'balanceOf',
       args: [WALLET]
     })
@@ -30,6 +37,7 @@ async function updateStats() {
     stats = {
       eth: parseFloat(formatEther(eth)),
       weth: parseFloat(formatEther(weth)),
+      link: parseFloat(formatEther(link)),
       block: Number(block)
     }
   } catch (e) {
@@ -68,6 +76,10 @@ app.get('/', (req, res) => {
             <span class="stat-value" id="weth">${stats.weth.toFixed(6)}</span>
           </div>
           <div class="stat-row">
+            <span class="stat-label">LINK:</span>
+            <span class="stat-value" id="link">${stats.link.toFixed(6)}</span>
+          </div>
+          <div class="stat-row">
             <span class="stat-label">Block:</span>
             <span class="stat-value" id="block">${stats.block}</span>
           </div>
@@ -87,6 +99,7 @@ app.get('/', (req, res) => {
             .then(d => {
               document.getElementById('eth').textContent = d.eth.toFixed(6)
               document.getElementById('weth').textContent = d.weth.toFixed(6)
+              document.getElementById('link').textContent = d.link.toFixed(6)
               document.getElementById('block').textContent = d.block
             })
         }
@@ -102,6 +115,7 @@ app.get('/api/stats', (req, res) => {
     res.json({
       eth: stats.eth,
       weth: stats.weth,
+      link: stats.link,
       block: stats.block,
       timestamp: new Date().toISOString()
     })

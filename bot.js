@@ -9,7 +9,7 @@ const walletClient = createWalletClient({ account, chain: baseSepolia, transport
 
 // Base Sepolia addresses
 const WETH = '0x4200000000000000000000000000000000000006'
-const USDC = '0x07865c6E87B9F70255377e024ace6630C1Eaa37F' // Using standard test USDC
+const USDC = '0x8a04d904055528a69f3e4594dda308a31aeb8457' // Base Sepolia USDC Testnet
 const UNISWAP_V3_ROUTER = '0x2626664c2603336E57B271c5C0b26F421741e481'
 
 const WETH_ABI = [

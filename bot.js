@@ -1,16 +1,16 @@
 import 'dotenv/config'
 import { createPublicClient, createWalletClient, http, formatEther, parseEther } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
-import { baseSepolia } from 'viem/chains'
+import { sepolia } from 'viem/chains'
 
 const account = privateKeyToAccount(`0x${process.env.PRIVATE_KEY}`)
-const publicClient = createPublicClient({ chain: baseSepolia, transport: http(process.env.RPC_URL) })
-const walletClient = createWalletClient({ account, chain: baseSepolia, transport: http(process.env.RPC_URL) })
+const publicClient = createPublicClient({ chain: sepolia, transport: http(process.env.RPC_URL) })
+const walletClient = createWalletClient({ account, chain: sepolia, transport: http(process.env.RPC_URL) })
 
-// Base Sepolia addresses
-const WETH = '0x4200000000000000000000000000000000000006'
-const USDC = '0x8a04d904055528a69f3e4594dda308a31aeb8457' // Base Sepolia USDC Testnet
-const UNISWAP_V3_ROUTER = '0x2626664c2603336E57B271c5C0b26F421741e481'
+// Ethereum Sepolia addresses
+const WETH = '0xfFf9976782d46CC05630D1f6eBAb6204F0990080'.toLowerCase()
+const LINK = '0x779877A7B0D9C06BeA21cd42eb15DaFF404C0b37'.toLowerCase()
+const UNISWAP_V3_ROUTER = '0xE592427A0AEce92De3Edee1F18E0157C05861564'.toLowerCase()
 
 const WETH_ABI = [
   { name: 'deposit', inputs: [], outputs: [], stateMutability: 'payable', type: 'function' },
@@ -23,7 +23,7 @@ const ERC20_ABI = [
   { name: 'balanceOf', inputs: [{ name: 'account', type: 'address' }], outputs: [{ name: '', type: 'uint256' }], stateMutability: 'view', type: 'function' }
 ]
 
-const UNISWAP_ROUTER_ABI = [
+const UNISWAP_V3_ROUTER_ABI = [
   {
     name: 'exactInputSingle',
     inputs: [{
@@ -64,13 +64,13 @@ async function init() {
     })
     console.log(`WETH: ${formatEther(weth)}`)
 
-    const usdc = await publicClient.readContract({
-      address: USDC,
+    const link = await publicClient.readContract({
+      address: LINK,
       abi: ERC20_ABI,
       functionName: 'balanceOf',
       args: [account.address]
     })
-    console.log(`USDC: ${(Number(usdc) / 1e6).toFixed(6)}\n`)
+    console.log(`LINK: ${formatEther(link)}\n`)
   } catch (e) {
     console.log(`Error reading balances\n`)
   }
@@ -96,9 +96,9 @@ async function wrapETH(amountEth) {
   }
 }
 
-async function swapWETHforUSDC(amountWeth) {
+async function swapWETHforLINK(amountWeth) {
   try {
-    console.log(`\n💱 Swapping ${amountWeth} WETH for USDC on Uniswap V3...`)
+    console.log(`\n💱 Swapping ${amountWeth} WETH for LINK on Ethereum Sepolia...`)
 
     // Approve WETH spending
     console.log(`⏳ Approving WETH...`)
@@ -111,19 +111,19 @@ async function swapWETHforUSDC(amountWeth) {
     await publicClient.waitForTransactionReceipt({ hash: approveTx })
     console.log(`✅ Approved\n`)
 
-    // Execute swap
+    // Execute V3 swap
     console.log(`⏳ Executing swap on Uniswap V3...`)
     const deadline = BigInt(Math.floor(Date.now() / 1000) + 60 * 20)
     const amountInWei = parseEther(amountWeth.toString())
 
     const tx = await walletClient.writeContract({
       address: UNISWAP_V3_ROUTER,
-      abi: UNISWAP_ROUTER_ABI,
+      abi: UNISWAP_V3_ROUTER_ABI,
       functionName: 'exactInputSingle',
       args: [{
         tokenIn: WETH,
-        tokenOut: USDC,
-        fee: 3000n,
+        tokenOut: LINK,
+        fee: 3000n, // 0.3% fee tier
         recipient: account.address,
         deadline: deadline,
         amountIn: amountInWei,
@@ -156,28 +156,34 @@ async function run() {
     console.log(`⚠️  Low ETH (${ethAmount.toFixed(6)} ETH)\n`)
   }
 
-  // Just keep monitoring
-  let count = 0
-  setInterval(async () => {
-    count++
-    const bal = await publicClient.getBalance({ address: account.address })
-    const wethBal = await publicClient.readContract({
-      address: WETH,
-      abi: WETH_ABI,
-      functionName: 'balanceOf',
-      args: [account.address]
-    })
-    const usdcBal = await publicClient.readContract({
-      address: USDC,
-      abi: ERC20_ABI,
-      functionName: 'balanceOf',
-      args: [account.address]
-    })
+  // Monitor balances at every block
+  let lastBlock = 0
+  const checkBalances = async () => {
+    const currentBlock = await publicClient.getBlockNumber()
 
-    if (count % 10 === 0) {
-      console.log(`[${count}] ETH: ${formatEther(bal)} | WETH: ${formatEther(wethBal)} | USDC: ${(Number(usdcBal) / 1e6).toFixed(6)}`)
+    if (currentBlock > lastBlock) {
+      lastBlock = Number(currentBlock)
+      const bal = await publicClient.getBalance({ address: account.address })
+      const wethBal = await publicClient.readContract({
+        address: WETH,
+        abi: WETH_ABI,
+        functionName: 'balanceOf',
+        args: [account.address]
+      })
+      const linkBal = await publicClient.readContract({
+        address: LINK,
+        abi: ERC20_ABI,
+        functionName: 'balanceOf',
+        args: [account.address]
+      })
+
+      console.log(`[Block ${lastBlock}] ETH: ${formatEther(bal)} | WETH: ${formatEther(wethBal)} | LINK: ${formatEther(linkBal)}`)
     }
-  }, 5000)
+
+    setTimeout(checkBalances, 1000)
+  }
+
+  checkBalances()
 }
 
 // Handle command line args
@@ -187,11 +193,11 @@ if (args[0] === 'wrap' && args[1]) {
   wrapETH(amount).then(() => run())
 } else if (args[0] === 'swap' && args[1]) {
   const amount = parseFloat(args[1])
-  swapWETHforUSDC(amount).then(() => run())
+  swapWETHforLINK(amount).then(() => run())
 } else {
   console.log('\nUsage:')
-  console.log('  node bot.js            - Start monitoring')
+  console.log('  node bot.js            - Start monitoring balances (updates per block)')
   console.log('  node bot.js wrap NUM   - Wrap ETH to WETH')
-  console.log('  node bot.js swap NUM   - Swap WETH for USDC on Uniswap V3\n')
+  console.log('  node bot.js swap NUM   - Swap WETH for LINK on Uniswap V3\n')
   run()
 }

@@ -1,14 +1,14 @@
 import 'dotenv/config'
 import express from 'express'
 import { createPublicClient, http, formatEther } from 'viem'
-import { baseSepolia } from 'viem/chains'
+import { sepolia } from 'viem/chains'
 
 const app = express()
 const PORT = 3000
 
-const publicClient = createPublicClient({ chain: baseSepolia, transport: http(process.env.RPC_URL) })
-const WETH = '0x4200000000000000000000000000000000000006'
-const LINK = '0xE4aB69C077896252FAFBD49EFD26B5D171A32410'
+const publicClient = createPublicClient({ chain: sepolia, transport: http(process.env.RPC_URL) })
+const WETH = '0xfFf9976782d46CC05630D1f6eBAb6204F0990080'.toLowerCase()
+const LINK = '0x779877A7B0D9C06BeA21cd42eb15DaFF404C0b37'.toLowerCase()
 const WALLET = '0xF86DcFC45532697ABE3ef2AfdAa20CAC44f86B8F'
 
 const ERC20_ABI = [
@@ -51,7 +51,7 @@ app.get('/', (req, res) => {
     <!DOCTYPE html>
     <html>
     <head>
-      <title>Base Sepolia Trading Bot</title>
+      <title>Ethereum Sepolia Trading Bot</title>
       <style>
         body { font-family: monospace; background: #0a0e27; color: #00ff00; padding: 20px; }
         .container { max-width: 600px; margin: 0 auto; }
@@ -65,7 +65,7 @@ app.get('/', (req, res) => {
     </head>
     <body>
       <div class="container">
-        <h1>🤖 BASE SEPOLIA TRADING BOT</h1>
+        <h1>🤖 ETHEREUM SEPOLIA TRADING BOT</h1>
         <div class="stats">
           <div class="stat-row">
             <span class="stat-label">ETH:</span>

@@ -9,7 +9,7 @@ const walletClient = createWalletClient({ account, chain: sepolia, transport: ht
 
 // Ethereum Sepolia addresses
 const WETH = '0xfFf9976782d46CC05630D1f6eBAb6204F0990080'.toLowerCase()
-const LINK = '0x779877A7B0D9C06BeA21cd42eb15DaFF404C0b37'.toLowerCase()
+const LINK = '0x779877A7B0D9E8603169DdbD7836e478b4624789'.toLowerCase()
 const UNISWAP_V3_ROUTER = '0xE592427A0AEce92De3Edee1F18E0157C05861564'.toLowerCase()
 
 const WETH_ABI = [

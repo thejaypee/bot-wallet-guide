@@ -46,76 +46,157 @@ const UNISWAP_V3_ROUTER_ABI = [
   }
 ]
 
-async function init() {
-  const block = await publicClient.getBlockNumber()
-  const eth = await publicClient.getBalance({ address: account.address })
+// Trading state
+const state = {
+  ethBalance: 0n,
+  wethBalance: 0n,
+  linkBalance: 0n,
+  priceHistory: [],
+  lastBlock: 0,
+  tradesExecuted: 0,
+  totalPNL: 0
+}
 
-  console.log('\n🤖 BASE SEPOLIA TRADING BOT')
-  console.log(`📍 ${account.address}`)
-  console.log(`💰 ETH: ${formatEther(eth)}`)
-  console.log(`Block: ${block}\n`)
+// Trading configuration
+const CONFIG = {
+  minTradeAmount: 0.01, // Minimum ETH to wrap
+  gasReserve: 0.02, // Keep 0.02 ETH for gas
+  rebalanceThreshold: 0.5, // Rebalance if portfolio ratio drifts 50%
+  volatilityWindow: 20, // Number of prices to track for volatility
+  volatilityThreshold: 0.05, // 5% volatility to trigger rebalance
+}
 
+async function updateBalances() {
   try {
-    const weth = await publicClient.readContract({
-      address: WETH,
-      abi: WETH_ABI,
-      functionName: 'balanceOf',
-      args: [account.address]
-    })
-    console.log(`WETH: ${formatEther(weth)}`)
+    const eth = await publicClient.getBalance({ address: account.address })
 
-    const link = await publicClient.readContract({
-      address: LINK,
-      abi: ERC20_ABI,
-      functionName: 'balanceOf',
-      args: [account.address]
-    })
-    console.log(`LINK: ${formatEther(link)}\n`)
+    let weth = 0n, link = 0n
+
+    try {
+      weth = await publicClient.readContract({
+        address: WETH,
+        abi: WETH_ABI,
+        functionName: 'balanceOf',
+        args: [account.address]
+      })
+    } catch (e) {
+      // WETH reading failed, set to 0
+      weth = 0n
+    }
+
+    try {
+      link = await publicClient.readContract({
+        address: LINK,
+        abi: ERC20_ABI,
+        functionName: 'balanceOf',
+        args: [account.address]
+      })
+    } catch (e) {
+      // LINK reading failed, set to 0
+      link = 0n
+    }
+
+    state.ethBalance = eth
+    state.wethBalance = weth
+    state.linkBalance = link
+
+    return {
+      eth: parseFloat(formatEther(eth)),
+      weth: parseFloat(formatEther(weth)),
+      link: parseFloat(formatEther(link))
+    }
   } catch (e) {
-    console.log(`Error reading balances\n`)
+    console.error(`[ERROR] updateBalances: ${e.message.split('\n')[0]}`)
+    return { eth: 0, weth: 0, link: 0 }
   }
 }
 
-async function wrapETH(amountEth) {
-  try {
-    console.log(`\n💱 Wrapping ${amountEth} ETH to WETH...`)
-    const tx = await walletClient.writeContract({
-      address: WETH,
-      abi: WETH_ABI,
-      functionName: 'deposit',
-      value: parseEther(amountEth.toString())
-    })
+async function getPrice() {
+  // Simulate price based on balance ratio (simple market price indicator)
+  const wethAmount = parseFloat(formatEther(state.wethBalance))
+  const linkAmount = parseFloat(formatEther(state.linkBalance))
 
-    const receipt = await publicClient.waitForTransactionReceipt({ hash: tx })
-    console.log(`✅ Wrapped! TX: ${tx}`)
-    console.log(`Block: ${receipt.blockNumber}\n`)
+  if (wethAmount === 0) return 1.0 // Default: 1 WETH = 1 LINK
+  return linkAmount / wethAmount
+}
+
+function calculateVolatility() {
+  if (state.priceHistory.length < 2) return 0
+
+  const prices = state.priceHistory.slice(-CONFIG.volatilityWindow)
+  const mean = prices.reduce((a, b) => a + b) / prices.length
+  const variance = prices.reduce((sum, p) => sum + Math.pow(p - mean, 2), 0) / prices.length
+  return Math.sqrt(variance) / mean
+}
+
+async function shouldRebalance() {
+  const balances = await updateBalances()
+  const volatility = calculateVolatility()
+
+  console.log(`[INFO] Volatility: ${(volatility * 100).toFixed(2)}% | ETH: ${balances.eth.toFixed(4)} | WETH: ${balances.weth.toFixed(4)} | LINK: ${balances.link.toFixed(2)}`)
+
+  // Rebalance if: high volatility OR portfolio heavily skewed to one asset
+  if (volatility > CONFIG.volatilityThreshold) {
+    console.log(`⚡ High volatility detected (${(volatility * 100).toFixed(2)}%)`)
     return true
-  } catch (e) {
-    console.error(`❌ Wrap failed: ${e.message.split('\n')[0]}`)
-    return false
   }
+
+  // Check if portfolio is imbalanced (e.g., all in LINK, no WETH)
+  const totalValue = balances.weth + balances.link // Rough approximation
+  if (totalValue > 0) {
+    const linkRatio = balances.link / totalValue
+    if (linkRatio > 0.95 || linkRatio < 0.05) {
+      console.log(`⚖️ Portfolio imbalanced (LINK ratio: ${(linkRatio * 100).toFixed(1)}%)`)
+      return true
+    }
+  }
+
+  return false
 }
 
-async function swapWETHforLINK(amountWeth) {
-  try {
-    console.log(`\n💱 Swapping ${amountWeth} WETH for LINK on Ethereum Sepolia...`)
+async function autoWrapETH() {
+  const balances = await updateBalances()
+  const availableETH = balances.eth - CONFIG.gasReserve
 
-    // Approve WETH spending
-    console.log(`⏳ Approving WETH...`)
-    const approveTx = await walletClient.writeContract({
+  if (availableETH > CONFIG.minTradeAmount && balances.weth < 0.01) {
+    try {
+      console.log(`\n🔄 [AUTO] Wrapping ${availableETH.toFixed(4)} ETH to WETH...`)
+      const tx = await walletClient.writeContract({
+        address: WETH,
+        abi: WETH_ABI,
+        functionName: 'deposit',
+        value: parseEther(availableETH.toString())
+      })
+      await publicClient.waitForTransactionReceipt({ hash: tx })
+      console.log(`✅ [DONE] Wrapped! TX: ${tx}`)
+      state.tradesExecuted++
+      return true
+    } catch (e) {
+      console.error(`❌ Wrap failed: ${e.message.split('\n')[0]}`)
+      return false
+    }
+  }
+  return false
+}
+
+async function autoSwapWETH() {
+  const balances = await updateBalances()
+
+  if (balances.weth < 0.001) return false
+
+  try {
+    console.log(`\n💱 [AUTO] Swapping ${balances.weth.toFixed(4)} WETH for LINK...`)
+
+    // Approve
+    await walletClient.writeContract({
       address: WETH,
       abi: WETH_ABI,
       functionName: 'approve',
-      args: [UNISWAP_V3_ROUTER, parseEther(amountWeth.toString())]
+      args: [UNISWAP_V3_ROUTER, state.wethBalance]
     })
-    await publicClient.waitForTransactionReceipt({ hash: approveTx })
-    console.log(`✅ Approved\n`)
 
-    // Execute V3 swap
-    console.log(`⏳ Executing swap on Uniswap V3...`)
+    // Swap
     const deadline = BigInt(Math.floor(Date.now() / 1000) + 60 * 20)
-    const amountInWei = parseEther(amountWeth.toString())
-
     const tx = await walletClient.writeContract({
       address: UNISWAP_V3_ROUTER,
       abi: UNISWAP_V3_ROUTER_ABI,
@@ -123,18 +204,18 @@ async function swapWETHforLINK(amountWeth) {
       args: [{
         tokenIn: WETH,
         tokenOut: LINK,
-        fee: 3000n, // 0.3% fee tier
+        fee: 3000n,
         recipient: account.address,
         deadline: deadline,
-        amountIn: amountInWei,
+        amountIn: state.wethBalance,
         amountOutMinimum: 0n,
         sqrtPriceLimitX96: 0n
       }]
     })
 
     const receipt = await publicClient.waitForTransactionReceipt({ hash: tx })
-    console.log(`✅ Swapped! TX: ${tx}`)
-    console.log(`Block: ${receipt.blockNumber}\n`)
+    console.log(`✅ [DONE] Swapped! TX: ${tx}`)
+    state.tradesExecuted++
     return true
   } catch (e) {
     console.error(`❌ Swap failed: ${e.message.split('\n')[0]}`)
@@ -142,62 +223,66 @@ async function swapWETHforLINK(amountWeth) {
   }
 }
 
-async function run() {
-  await init()
+async function runBot() {
+  console.log('\n🤖 AUTONOMOUS TRADING BOT STARTED')
+  console.log(`📍 ${account.address}`)
+  console.log(`🔗 Ethereum Sepolia | Uniswap V3\n`)
 
-  const eth = await publicClient.getBalance({ address: account.address })
-  const ethAmount = parseFloat(formatEther(eth))
+  const balances = await updateBalances()
+  console.log(`Initial portfolio:`)
+  console.log(`  ETH: ${balances.eth.toFixed(4)}`)
+  console.log(`  WETH: ${balances.weth.toFixed(4)}`)
+  console.log(`  LINK: ${balances.link.toFixed(2)}\n`)
 
-  if (ethAmount > 0.01) {
-    console.log(`✅ Ready. Gas reserve: ${ethAmount.toFixed(6)} ETH\n`)
-    console.log(`When ready to trade:`)
-    console.log(`  node bot.js wrap 0.01   (wrap 0.01 ETH to WETH, keep rest for gas)\n`)
-  } else {
-    console.log(`⚠️  Low ETH (${ethAmount.toFixed(6)} ETH)\n`)
-  }
+  let blockCount = 0
+  const checkAndTrade = async () => {
+    try {
+      const currentBlock = await publicClient.getBlockNumber()
 
-  // Monitor balances at every block
-  let lastBlock = 0
-  const checkBalances = async () => {
-    const currentBlock = await publicClient.getBlockNumber()
+      if (Number(currentBlock) > state.lastBlock) {
+        state.lastBlock = Number(currentBlock)
+        blockCount++
 
-    if (currentBlock > lastBlock) {
-      lastBlock = Number(currentBlock)
-      const bal = await publicClient.getBalance({ address: account.address })
-      const wethBal = await publicClient.readContract({
-        address: WETH,
-        abi: WETH_ABI,
-        functionName: 'balanceOf',
-        args: [account.address]
-      })
-      const linkBal = await publicClient.readContract({
-        address: LINK,
-        abi: ERC20_ABI,
-        functionName: 'balanceOf',
-        args: [account.address]
-      })
+        const price = await getPrice()
+        state.priceHistory.push(price)
 
-      console.log(`[Block ${lastBlock}] ETH: ${formatEther(bal)} | WETH: ${formatEther(wethBal)} | LINK: ${formatEther(linkBal)}`)
+        // Keep history bounded
+        if (state.priceHistory.length > CONFIG.volatilityWindow * 2) {
+          state.priceHistory.shift()
+        }
+
+        // Periodic status update
+        if (blockCount % 5 === 0) {
+          console.log(`\n[Block ${state.lastBlock}] Monitoring... (${state.tradesExecuted} trades executed)`)
+
+          // Check if rebalancing needed
+          if (await shouldRebalance()) {
+            console.log(`\n🎯 Trading signal: REBALANCE PORTFOLIO`)
+
+            const balances = await updateBalances()
+
+            // If mostly LINK, wrap and swap
+            if (balances.weth < 0.001 && balances.eth > CONFIG.gasReserve + CONFIG.minTradeAmount) {
+              await autoWrapETH()
+            }
+
+            // If have WETH, swap it
+            if (balances.weth > 0.001) {
+              await autoSwapWETH()
+            }
+          }
+        }
+      }
+
+      setTimeout(checkAndTrade, 1000)
+    } catch (e) {
+      console.error(`[ERROR] ${e.message}`)
+      setTimeout(checkAndTrade, 5000)
     }
-
-    setTimeout(checkBalances, 1000)
   }
 
-  checkBalances()
+  checkAndTrade()
 }
 
-// Handle command line args
-const args = process.argv.slice(2)
-if (args[0] === 'wrap' && args[1]) {
-  const amount = parseFloat(args[1])
-  wrapETH(amount).then(() => run())
-} else if (args[0] === 'swap' && args[1]) {
-  const amount = parseFloat(args[1])
-  swapWETHforLINK(amount).then(() => run())
-} else {
-  console.log('\nUsage:')
-  console.log('  node bot.js            - Start monitoring balances (updates per block)')
-  console.log('  node bot.js wrap NUM   - Wrap ETH to WETH')
-  console.log('  node bot.js swap NUM   - Swap WETH for LINK on Uniswap V3\n')
-  run()
-}
+// Start the bot
+runBot().catch(console.error)
